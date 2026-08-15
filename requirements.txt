@@ -1,0 +1,4 @@
+telethon
+motor
+nest_asyncio
+aiohttp
