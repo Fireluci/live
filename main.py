@@ -15,16 +15,6 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "1BVtsOHQBu8L59l0nKRHptIg_t_LZ
 DESTINATION_CHANNEL = int(os.environ.get("DESTINATION_CHANNEL", -1004388839544))
 PORT = int(os.environ.get("PORT", 8080))
 
-SOURCE_CHANNELS = [
-    -1003387671300,
-    -1003468710048,
-    -1003391810336,
-    -1002504957483,
-    -1003492599133,
-    -1003243949222,
-    -1002635680665
-]
-
 MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb+srv://test:test@test.i5mjcij.mongodb.net/?appName=test")
 mongo_client = AsyncIOMotorClient(MONGODB_URL)
 duplicates_col = mongo_client["telegram_bot_db"]["global_seen_v2"]
@@ -50,8 +40,12 @@ async def start_web_server():
 # ==============================================================================
 # --- REPOSTER EVENT HANDLER ---
 # ==============================================================================
-@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
+@client.on(events.NewMessage())
 async def handler(event):
+    # Only mirror from channels/groups the account is a member of, and never from the destination itself.
+    if not (event.is_channel or event.is_group) or event.chat_id == DESTINATION_CHANNEL:
+        return
+
     message = event.message
     print(f"🔥 NEW POST: Chat ID: {message.chat_id} | Msg ID: {message.id} | Media: {bool(message.media)}", flush=True)
 
@@ -73,8 +67,11 @@ async def handler(event):
         print(f"⏩ [SKIPPED EXTENSION] {fname}", flush=True)
         return
 
-    # Bulletproof universal file signature
-    file_uid = f"{media_obj.id}_{getattr(media_obj, 'access_hash', 0)}_{getattr(media_obj, 'size', 0)}"
+    # File signature based on the stable, content-based document id only.
+    # access_hash is a per-context access token and can differ for the same
+    # file when it's seen via different chats, so including it here was
+    # causing real duplicates to be treated as distinct files.
+    file_uid = f"{media_obj.id}"
 
     try:
         # Atomic DB insertion check to block duplicates instantly
@@ -104,7 +101,9 @@ async def main():
 
     print("🟢 [TELETHON USERBOT] Connecting...", flush=True)
     await client.start()
-    print(f"🟢 [ONLINE] Listening to {len(SOURCE_CHANNELS)} channels...", flush=True)
+    dialogs = await client.get_dialogs()
+    joined = sum(1 for d in dialogs if d.is_channel or d.is_group)
+    print(f"🟢 [ONLINE] Listening to {joined} joined channels/groups...", flush=True)
     
     await client.run_until_disconnected()
 
