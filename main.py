@@ -11,7 +11,7 @@ from telethon.sessions import StringSession
 # ==============================================================================
 API_ID = int(os.environ.get("API_ID", 20354559))
 API_HASH = os.environ.get("API_HASH", "bbdf772b35141fa8b661740dddb840bf")
-SESSION_STRING = os.environ.get("SESSION_STRING", "1BVtsOHQBu8L59l0nKRHptIg_t_LZSRHKR9eBX6DR6iBtZ5-AvP0GmdscRtFeKmry6aLGFQiSY-S9mIZjd8GgbSyk5ZWKqGsSKamU-LncBnFpt_gfSn95XL1jHNlgj_4XlJ9kP6znc8o65WkA2Hy9gfFOKk9NeXRVkWJ7HqUQx4naOlFaoiDtztRO2uw-8iI7v8X-wreDzSSfMNlss4xTu47VIjI4Sghu48_-MrEjxIoQBAb2q709woa4bJGzGGGAd20tyOJNmqX7U0uzDwn4xJ5ZYOo7-Th34KYlJdrP5V8cueme3jOB1ejZsrYBTT3jJd6mR9Vtk1wuq9CPXSQ2hGMwh6GFtlI=")
+SESSION_STRING = os.environ.get("SESSION_STRING", "1BVtsOH4Bu455F3vNXuvPbawa5nAnaQg3wEaFzRoY0xzSOqlkCMSnj91qUj1LJfLG6bMlPYsa485cV-VG1iCMcZHNaNmypjWo0r3kV6vN35pWyJof2tqggUXjc2pk_s2rsBYZUzREcjHWuFe2r75JvBToEUNvcjpcqGtQNf5vZgysfdEwqIbGTG-c6KYR_oAYry1ZfWzhibHpuTkpSA4WKPVuyvKHonuhIZhQE5KEuSBZDAkg254q3IzR1_1ADKkjerKBviksR5ZZVsecTx8ov2E8B-RHLfvT0FRoaH2_fv05INR1AMlVkdmM8gcsBD3tXD12sZEDv91bi-iMJLDgCfmKU2mTDgg=")
 
 DESTINATION_CHANNEL = int(os.environ.get("DESTINATION_CHANNEL", -1004388839544))
 PORT = int(os.environ.get("PORT", 8080))
