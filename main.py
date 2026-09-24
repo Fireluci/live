@@ -118,7 +118,10 @@ async def handler(event):
     if not message.video and not message.document:
         print("⏩ [SKIPPED] Not a video or document.", flush=True)
         return
-
+    # Skip moving stickers (animated .tgs and video .webm); static webp stickers still pass
+    if message.sticker and message.sticker.mime_type != "image/webp":
+        print(f"⏩ [SKIPPED] Moving sticker ({message.sticker.mime_type}).", flush=True)
+        return
     media_obj = message.video or message.document
     
     fname = ""
