@@ -31,7 +31,10 @@ duplicates_col = mongo_client["telegram_bot_db"]["global_seen_v2"]
 pending_col = mongo_client["telegram_bot_db"]["pending_sends"]
 
 # Initialize Telethon Client
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+client = TelegramClient(
+    StringSession(SESSION_STRING), API_ID, API_HASH,
+    sequential_updates=True,
+)
 
 # Single serialized queue: every send goes through one worker, one at a time.
 send_queue = asyncio.Queue()
