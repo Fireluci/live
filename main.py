@@ -1,5 +1,7 @@
 import os
 import re
+import copy
+import bisect
 import asyncio
 from aiohttp import web
 from telethon import TelegramClient, events
@@ -41,11 +43,96 @@ client = TelegramClient(
 send_queue = asyncio.Queue()
 
 # ==============================================================================
-# --- CAPTION SANITIZER: strip markdown, emoji, symbols — keep a-z 0-9 only ---
+# --- CAPTION BUILDING: filename, blank line, original caption — with real
+# --- bold/link/mention formatting preserved, emoji stripped, symbols kept ---
 # ==============================================================================
-def sanitize(s):
-    s = re.sub(r"[^A-Za-z0-9]+", " ", s or "")
-    return re.sub(r"\s+", " ", s).strip()
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"  # flag emoji (regional indicators)
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F700-\U0001F77F"  # alchemical symbols
+    "\U0001F780-\U0001F7FF"  # geometric shapes extended
+    "\U0001F800-\U0001F8FF"  # supplemental arrows-C
+    "\U0001F900-\U0001F9FF"  # supplemental symbols & pictographs
+    "\U0001FA00-\U0001FA6F"  # chess symbols
+    "\U0001FA70-\U0001FAFF"  # symbols & pictographs extended-A
+    "\U0001F000-\U0001F0FF"  # mahjong / playing cards / dominoes
+    "\U00002600-\U000026FF"  # misc symbols (e.g. warning sign)
+    "\U00002700-\U000027FF"  # dingbats + supplemental arrows-A (e.g. ➜ ➤ ➠)
+    "\U00002900-\U0000297F"  # supplemental arrows-B
+    "\U00002B00-\U00002BFF"  # misc symbols & arrows (e.g. stars, ➡)
+    "\U0000FE0F"             # variation selector-16 (emoji presentation)
+    "\U0000200D"             # zero-width joiner (glues multi-part emoji)
+    "]+",
+    flags=re.UNICODE,
+)
+
+def strip_emoji(text, entities):
+    """Remove emoji from text while shifting formatting entities (bold,
+    links, mentions) to match. Entities are counted in UTF-16 units, so
+    removal has to be mapped through that, not python character counts."""
+    if not text:
+        return text, list(entities)
+
+    lengths = [2 if ord(ch) > 0xFFFF else 1 for ch in text]
+    old_u16 = [0]
+    for l in lengths:
+        old_u16.append(old_u16[-1] + l)
+
+    remove = [False] * len(text)
+    for m in EMOJI_PATTERN.finditer(text):
+        for i in range(m.start(), m.end()):
+            remove[i] = True
+
+    new_chars = []
+    old_to_new = {0: 0}
+    new_u16 = 0
+    for i, ch in enumerate(text):
+        if not remove[i]:
+            new_chars.append(ch)
+            new_u16 += lengths[i]
+        old_to_new[old_u16[i + 1]] = new_u16
+
+    def _map(offset):
+        if offset in old_to_new:
+            return old_to_new[offset]
+        idx = bisect.bisect_left(old_u16, offset)
+        return old_to_new[old_u16[min(idx, len(old_u16) - 1)]]
+
+    new_entities = []
+    for e in entities:
+        start, end = _map(e.offset), _map(e.offset + e.length)
+        if end > start:
+            e = copy.copy(e)
+            e.offset, e.length = start, end - start
+            new_entities.append(e)
+
+    return "".join(new_chars), new_entities
+
+def build_caption(fname, message):
+    """(filename) blank line (original caption), bold/links/mentions kept as
+    real entities (not markdown text), emoji removed, other symbols kept."""
+    raw = message.raw_text or ""
+    entities = [copy.copy(e) for e in (message.entities or [])]
+
+    if fname:
+        prefix = f"{fname}\n\n"
+        shift = len(prefix.encode("utf-16-le")) // 2  # Telegram counts UTF-16 units
+        for e in entities:
+            e.offset += shift
+        caption = prefix + raw
+    else:
+        caption = raw
+
+    caption, entities = strip_emoji(caption, entities)
+
+    if len(caption) > 1024:  # Telegram's caption hard cap
+        caption = caption[:1024]
+        entities = [e for e in entities if e.offset + e.length <= 1024]
+
+    return caption, entities
 
 # ==============================================================================
 # --- HEALTH-CHECK WEB SERVER FOR RENDER ---
@@ -72,11 +159,15 @@ async def give_up(file_uid, reason):
 
 async def send_worker():
     while True:
-        file_uid, chat_id, message_id, media, caption = await send_queue.get()
+        file_uid, chat_id, message_id, media, caption, entities = await send_queue.get()
         attempt = 0
         while True:
             try:
-                await client.send_file(DESTINATION_CHANNEL, media, caption=caption)
+                await client.send_file(
+                    DESTINATION_CHANNEL, media,
+                    caption=caption,
+                    formatting_entities=entities,
+                )
                 print(f"🚀 [MIRRORED SUCCESS] Sent unique file to destination!", flush=True)
                 await pending_col.delete_one({"_id": file_uid})
                 break
@@ -159,22 +250,21 @@ async def handler(event):
         print(f"🔄 [DUPLICATE BLOCKED] File already processed across channels.", flush=True)
         return
 
-    # raw_text avoids Telethon re-rendering markdown (**bold**, [text](url));
-    # sanitize() then strips anything left that isn't a letter, digit, or space.
-    caption = sanitize(f"{fname}\n\n{message.raw_text or ''}" if fname else (message.raw_text or ""))
+    caption, entities = build_caption(fname, message)
 
     # Durable record so a crash/restart can resume this item (best-effort —
     # only works if the source message still exists when we come back).
+    # Just fname is stored; caption+entities are rebuilt fresh on recovery.
     await pending_col.insert_one({
         "_id": file_uid,
         "chat_id": event.chat_id,
         "message_id": message.id,
-        "caption": caption,
+        "fname": fname,
     })
 
     # Hand off to the serialized send queue instead of sending directly —
     # the worker paces every send and handles flood waits with retries.
-    await send_queue.put((file_uid, event.chat_id, message.id, message.media, caption))
+    await send_queue.put((file_uid, event.chat_id, message.id, message.media, caption, entities))
     print(f"📥 [QUEUED] {file_uid} (queue size: {send_queue.qsize()})", flush=True)
 
 # ==============================================================================
@@ -203,7 +293,8 @@ async def main():
             fresh = None
             print(f"⚠️ [RECOVERY REFETCH FAILED] {file_uid}: {e}", flush=True)
         if fresh and fresh.media:
-            await send_queue.put((file_uid, doc["chat_id"], doc["message_id"], fresh.media, doc["caption"]))
+            caption, entities = build_caption(doc.get("fname", ""), fresh)
+            await send_queue.put((file_uid, doc["chat_id"], doc["message_id"], fresh.media, caption, entities))
             recovered += 1
         else:
             print(f"❌ [UNRECOVERABLE] {file_uid} — source message gone, dropping leftover claim.", flush=True)
