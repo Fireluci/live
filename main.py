@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from aiohttp import web
 from telethon import TelegramClient, events
@@ -38,6 +39,13 @@ client = TelegramClient(
 
 # Single serialized queue: every send goes through one worker, one at a time.
 send_queue = asyncio.Queue()
+
+# ==============================================================================
+# --- CAPTION SANITIZER: strip markdown, emoji, symbols — keep a-z 0-9 only ---
+# ==============================================================================
+def sanitize(s):
+    s = re.sub(r"[^A-Za-z0-9]+", " ", s or "")
+    return re.sub(r"\s+", " ", s).strip()
 
 # ==============================================================================
 # --- HEALTH-CHECK WEB SERVER FOR RENDER ---
@@ -151,7 +159,9 @@ async def handler(event):
         print(f"🔄 [DUPLICATE BLOCKED] File already processed across channels.", flush=True)
         return
 
-    caption = f"{fname}\n\n{message.text or ''}" if fname else (message.text or "")
+    # raw_text avoids Telethon re-rendering markdown (**bold**, [text](url));
+    # sanitize() then strips anything left that isn't a letter, digit, or space.
+    caption = sanitize(f"{fname}\n\n{message.raw_text or ''}" if fname else (message.raw_text or ""))
 
     # Durable record so a crash/restart can resume this item (best-effort —
     # only works if the source message still exists when we come back).
